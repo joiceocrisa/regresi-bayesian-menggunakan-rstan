@@ -1,4 +1,4 @@
-# regresi-bayesian-menggunakan-rstan
+# Regresi Bayesian Menggunakan Rstan
 Project ini melakukan regresi bayesian dengan menggunakan package **Rstan.**
 
 Data yang digunakan adalah Data Kanker Serviks dan akan dilakukan regresi terhadap variabel Y. 
