@@ -1,0 +1,197 @@
+---
+title: "Regresi Bayesian Rstan"
+author: "Joice Ocrisa"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(rstan)
+library(tidyverse)
+library(loo)
+library(readxl)
+
+source("stan distribution model.R")
+source("stan regression model.R")
+source("utils.R")
+
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+```{r Data}
+df <- read_excel("Data Kanker Seviks.xlsx")
+df
+```
+
+# ==============================================================================
+# EKSPLORASI DATA
+# ==============================================================================
+
+```{r Informasi Dataset}
+cat(sprintf("Shape dataframe: (%d, %d)\n", nrow(df), ncol(df)))
+cat("Struktur data:\n")
+print(str(df))
+cat("\nRingkasan data:\n")
+summary(df)
+```
+
+```{r Missing Value}
+cat("\nMissing value pada data:\n")
+print(colSums(is.na(df)))
+```
+
+```{r Distribusi Variabel Y}
+hist(df$Y,
+     main = "Distribusi Frekuensi Pemeriksaan (Y)",
+     xlab = "Jumlah Pemeriksaan",
+     col = "lightblue",
+     border = "black")
+
+boxplot(df$Y,
+        main = "Boxplot Variabel Y",
+        col = "orange")
+
+```
+
+```{r Distribusi Variabel X}
+par(mfrow = c(2, 2))  # membuat grid 2x2
+hist(df$X1, main="Usia Pasien (X1)", col="lightgreen")
+hist(df$X2, main="Jumlah Kemoterapi (X2)", col="lightgreen")
+hist(df$X3, main="Komplikasi (X3)", col="lightgreen")
+hist(df$X4, main="Anemia (X4)", col="lightgreen")
+par(mfrow = c(1, 1))
+
+```
+
+```{r Korelasi}
+library(corrplot)
+
+numeric_vars <- df[, c("Y", "X1", "X2", "X3", "X4", "X5")]
+corr_matrix <- cor(numeric_vars)
+
+corrplot(corr_matrix, method="color", 
+         addCoef.col = "black", 
+         tl.col="black",
+         number.cex = 0.7)
+```
+
+```{r VIF}
+library(car)
+model <- lm(Y ~ X1 + X2 + X3 + X4 + X5, data = df)
+vif(model)
+```
+
+# ==============================================================================
+# Perbandingan Distribusi
+# ==============================================================================
+
+```{r Data Y}
+y <- df$Y
+N <- length(y)
+
+
+stan_data_cont <- list(N=N, y=as.vector(y))
+stan_data_int  <- list(N=N, y=as.integer(y))
+```
+
+
+```{r Fit Model}
+library(rstan)
+
+fit_normal <- stan(model_code = normal_code, data=stan_data_cont)
+fit_pois   <- stan(model_code = pois_code,data=stan_data_int)
+fit_nb     <- stan(model_code = negbin_code, data=stan_data_int)
+```
+
+```{r Ranking berdasarkan DIC}
+models <- list(fit_normal, fit_pois, fit_nb)
+names <- c("Normal", "Poisson", "Negative Binomial")
+
+result<-rank_models(models, names)
+result
+```
+
+```{r Distribusi Mendekati}
+best_model <- result$Model[1]
+cat("Jadi model terbaik adalah:", best_model)
+cat("\nHasil ini akan menjadi asumsi awal untuk dilanjutkan ke tahap regresi.")
+```
+
+# ==============================================================================
+# Permodelan Regresi
+# ==============================================================================
+
+```{r Data}
+y <- df$Y
+X  <- as.matrix(df[, c("X1","X2","X3","X4","X5")])
+N  <- nrow(df)
+K  <- ncol(X)
+
+stan_data <- list(
+  N = nrow(X),
+  K = ncol(X),
+  y = as.integer(y),
+  X = X
+)
+```
+
+
+
+```{r Fit Model}
+library(rstan)
+
+reg_pois   <- stan(model_code = stan_pois_code, 
+                 data=stan_data, 
+                 chains = 4, 
+                 iter = 3000, 
+                 warmup = 1000)
+reg_nb     <- stan(model_code = stan_nb_code,
+                 data=stan_data, 
+                 chains = 4, 
+                 iter = 3000, 
+                 warmup = 1000)
+reg_mixpois <- stan(model_code = stan_mix_pois_code, 
+                     data=stan_data, 
+                     chains = 4, 
+                 iter = 3000, 
+                 warmup = 1000)
+```
+
+
+```{r Hasil Regresi}
+cat("\nRegresi Poisson:\n")
+print(reg_pois,
+      pars = c("alpha", "beta"),
+      probs = c(0.025, 0.5, 0.975))
+post_pois <- rstan::extract(reg_pois)
+
+cat("\n\nRegresi Binomial Negatif:\n")
+print(reg_nb,
+      pars = c("alpha", "beta", "phi"),
+      probs = c(0.025, 0.5, 0.975))
+post_nb <- rstan::extract(fit_nb)
+
+cat("\n\nRegresi Mixture Poisson:\n")
+print(reg_mixpois,
+      pars = c("theta", "alpha", "beta1", "beta2"),
+      probs = c(0.025, 0.5, 0.975))
+post_mix_pois <- rstan::extract(reg_mixpois)
+
+```
+
+
+```{r Ranking Regression Models}
+models <- list(reg_pois, reg_nb, reg_mixpois)
+names <- c("Poisson", "Negative Binomial", "Mixture Poisson")
+
+result<-rank_models(models, names)
+result
+
+```
+
+```{r Model Terbaik}
+best_model <- result$Model[1]
+cat("Jadi model regresi terbaik adalah:", best_model)
+```
+
